@@ -7,6 +7,10 @@
 	"type": "module",
 	"scripts": {
 		"start": "node supervisor.js",
+		"dev": "node src/server/server.js",
+		"dev:login": "node src/server/server.js -login",
+		"debug": "node --inspect-brk=9229 src/server/server.js",
+		"debug:login": "node --inspect-brk=9229 src/server/server.js -login",
 		"genkey": "node scripts/genkey.js",
 		"init": "node scripts/init.js",
 		"postinstall": "node scripts/postinstall.js"

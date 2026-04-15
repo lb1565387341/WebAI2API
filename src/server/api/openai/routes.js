@@ -6,8 +6,9 @@
 import crypto from 'crypto';
 import { logger } from '../../../utils/logger.js';
 import { ERROR_CODES } from '../../errors.js';
-import { sendJson, sendApiError } from '../../respond.js';
+import { sendJson, sendApiError, sendSse, sendSseDone } from '../../respond.js';
 import { parseRequest } from './parse.js';
+import { detectToolCall, buildToolCallResponse, buildStreamingToolCallResponse } from './tool-calls.js';
 
 /**
  * 创建 OpenAI API 路由处理器
@@ -124,6 +125,7 @@ export function createOpenAIRouter(context) {
 
             const { prompt, imagePaths, modelId, modelName } = parseResult.data;
             const reasoning = data.reasoning === true;
+            const tools = data.tools; // 提取 tools
 
             logger.info('服务器', `[队列] 请求入队: ${prompt.slice(0, 100)}...`, { id: requestId, images: imagePaths.length });
 
@@ -137,7 +139,9 @@ export function createOpenAIRouter(context) {
                 modelName,
                 id: requestId,
                 isStreaming,
-                reasoning
+                reasoning,
+                tools, // 传递 tools
+                messages: data.messages // 传递原始消息用于多轮对话
             });
 
         } catch (err) {

@@ -16,6 +16,7 @@ import {
 import { ERROR_CODES } from './errors.js';
 import { incrementSuccess, incrementFailed } from '../utils/stats.js';
 import { createRecord, updateRecord, processResponseMedia } from '../utils/history.js';
+import { detectToolCall, buildToolCallResponse, buildStreamingToolCallResponse } from './api/openai/tool-calls.js';
 
 /**
  * @typedef {object} TaskContext
@@ -27,6 +28,9 @@ import { createRecord, updateRecord, processResponseMedia } from '../utils/histo
  * @property {string|null} modelName - 模型名称
  * @property {string} id - 请求唯一标识
  * @property {boolean} isStreaming - 是否流式请求
+ * @property {boolean} [reasoning] - 是否启用思考模式
+ * @property {Array} [tools] - 工具定义数组
+ * @property {Array} [messages] - 原始消息数组（用于多轮对话）
  */
 
 /**
@@ -94,7 +98,7 @@ export function createQueueManager(queueConfig, callbacks) {
      * @param {TaskContext} task - 任务上下文
      */
     async function processTask(task) {
-        const { res, prompt, imagePaths, modelId, modelName, id, isStreaming, reasoning } = task;
+        const { res, prompt, imagePaths, modelId, modelName, id, isStreaming, reasoning, tools, messages } = task;
         const startTime = Date.now();
 
         logger.info('服务器', '[队列] 开始处理任务', { id, remaining: queue.length });
@@ -178,6 +182,54 @@ export function createQueueManager(queueConfig, callbacks) {
             // 提取思考过程（如果有）
             if (result.reasoning) {
                 reasoningContent = result.reasoning;
+            }
+
+            // 检测工具调用
+            if (tools && Array.isArray(tools) && tools.length > 0 && finalContent) {
+                const toolDetection = detectToolCall(finalContent, tools);
+
+                if (toolDetection.hasToolCall) {
+                    logger.info('服务器', '检测到工具调用，返回工具调用格式响应', {
+                        id,
+                        toolName: toolDetection.toolName
+                    });
+
+                    // 发送工具调用响应
+                    if (isStreaming) {
+                        const chunks = buildStreamingToolCallResponse(
+                            toolDetection.toolName,
+                            toolDetection.args,
+                            undefined
+                        );
+
+                        for (const chunk of chunks) {
+                            sendSse(res, chunk);
+                        }
+                        sendSseDone(res);
+                    } else {
+                        const response = buildToolCallResponse(
+                            toolDetection.toolName,
+                            toolDetection.args,
+                            undefined
+                        );
+                        sendJson(res, 200, response);
+                    }
+
+                    // 更新历史记录为工具调用状态
+                    try {
+                        updateRecord(id, {
+                            status: 'success',
+                            responseText: `[工具调用] ${toolDetection.toolName}`,
+                            reasoningContent,
+                            durationMs: Date.now() - startTime
+                        });
+                    } catch (e) {
+                        logger.debug('服务器', `更新历史记录失败: ${e.message}`);
+                    }
+
+                    await incrementSuccess();
+                    return; // 提前返回，不执行后续的普通响应逻辑
+                }
             }
 
             logger.info('服务器', '结果已准备就绪', { id });

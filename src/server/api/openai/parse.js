@@ -32,6 +32,7 @@ function parseError(code, customMessage) {
  * @property {string|null} modelId - 解析后的模型 ID
  * @property {string|null} modelName - 原始模型名称
  * @property {boolean} isStreaming - 是否流式请求
+ * @property {Array} [tools] - 工具定义数组（可选）
  */
 
 /**
@@ -74,6 +75,7 @@ export async function parseRequest(data, options) {
     } = options;
 
     const messages = data.messages;
+    const tools = data.tools; // 提取 tools 字段
     const isStreaming = data.stream === true;
 
     // 验证 messages
@@ -115,7 +117,7 @@ export async function parseRequest(data, options) {
     // 分支 A: 文本模型解析 (构建虚拟上下文)
     // ============================================================
     if (isTextMode) {
-        return await parseTextRequest(messages, tempDir, imageLimit, modelKey, isStreaming);
+        return await parseTextRequest(messages, tempDir, imageLimit, modelKey, isStreaming, tools);
     }
 
     // ============================================================
@@ -127,7 +129,7 @@ export async function parseRequest(data, options) {
 /**
  * 解析文本请求 (构建虚拟上下文)
  */
-async function parseTextRequest(messages, tempDir, imageLimit, modelId, isStreaming) {
+async function parseTextRequest(messages, tempDir, imageLimit, modelId, isStreaming, tools) {
     let systemPrompt = '';
     let historyPrompt = '';
     let currentPrompt = '';
@@ -172,6 +174,22 @@ async function parseTextRequest(messages, tempDir, imageLimit, modelId, isStream
         return textBuffer;
     }
 
+    // 辅助函数：格式化角色名称
+    function formatRoleName(role) {
+        switch (role) {
+            case 'user':
+                return 'User';
+            case 'assistant':
+                return 'AI';
+            case 'tool':
+                return 'Tool Result';
+            case 'system':
+                return 'System';
+            default:
+                return role;
+        }
+    }
+
     // 1. 提取 System Prompt
     const systemMsg = messages.find(m => m.role === 'system');
     if (systemMsg) {
@@ -181,51 +199,81 @@ async function parseTextRequest(messages, tempDir, imageLimit, modelId, isStream
         }
     }
 
-    // 2. 区分历史和当前消息
-    // 找到最后一条 user 消息的索引
-    let lastUserIndex = -1;
+    // 2. 找到最后一条需要处理的消息（可能是 user 或 tool）
+    // 策略：从后往前找，跳过 assistant 的响应，找到最后一个 user 或 tool 消息
+    let lastMessageIndex = -1;
+    let lastMessageType = ''; // 'user' 或 'tool'
+
     for (let i = messages.length - 1; i >= 0; i--) {
-        if (messages[i].role === 'user') {
-            lastUserIndex = i;
+        const role = messages[i].role;
+        // 找到最后一个非 assistant 的消息
+        if (role === 'user' || role === 'tool') {
+            lastMessageIndex = i;
+            lastMessageType = role;
             break;
         }
     }
 
-    if (lastUserIndex === -1) {
+    if (lastMessageIndex === -1) {
         return parseError(ERROR_CODES.NO_USER_MESSAGES);
     }
 
-    // 3. 构建历史对话 (不包含 system 和 最后一条 user)
+    // 3. 构建历史对话 (不包含 system 和 最后一条消息)
     const historyMessages = messages.filter((m, index) => {
-        return m.role !== 'system' && index < lastUserIndex;
+        return m.role !== 'system' && index < lastMessageIndex;
     });
 
     if (historyMessages.length > 0) {
         historyPrompt += `=== 历史对话 (滑动窗口或摘要) ===\n`;
         for (const msg of historyMessages) {
-            const roleName = msg.role === 'user' ? 'User' : 'AI';
-            const content = await processContent(msg.content);
+            const roleName = formatRoleName(msg.role);
+            // 处理 tool 角色的特殊格式
+            let content;
+            if (msg.role === 'tool') {
+                // 工具调用结果，添加 tool_call_id 信息
+                const toolCallId = msg.tool_call_id ? ` [ID: ${msg.tool_call_id}]` : '';
+                const rawContent = await processContent(msg.content);
+                content = `[工具返回结果${toolCallId}]\n${rawContent}`;
+            } else {
+                content = await processContent(msg.content);
+            }
+
             historyPrompt += `${roleName}: ${content}\n`;
         }
         historyPrompt += `\n`;
     }
 
-    // 4. 构建当前输入
-    const lastUserMsg = messages[lastUserIndex];
-    const currentContent = await processContent(lastUserMsg.content);
+    // 4. 构建当前输入（可能是用户消息或工具调用结果）
+    const lastMsg = messages[lastMessageIndex];
+    let currentContent;
+    if (lastMessageType === 'tool') {
+        // 当前输入是工具调用结果
+        const toolCallId = lastMsg.tool_call_id ? ` [ID: ${lastMsg.tool_call_id}]` : '';
+        const rawContent = await processContent(lastMsg.content);
+        currentContent = `[工具返回结果${toolCallId}]\n${rawContent}`;
+    } else {
+        // 当前输入是用户消息
+        currentContent = await processContent(lastMsg.content);
+    }
 
     // 判断是否需要添加分割符号
     const hasContext = systemPrompt || historyPrompt;
     if (hasContext) {
         // 有上下文，添加分割符
-        currentPrompt = `=== 当前输入 ===\nUser: ${currentContent}`;
+        const inputLabel = lastMessageType === 'tool' ? 'Tool Result' : 'User';
+        currentPrompt = `=== 最新输入 ===\n${inputLabel}: ${currentContent}`;
     } else {
         // 没有上下文，直接使用内容
         currentPrompt = currentContent;
     }
 
     // 5. 合并最终 Prompt
-    const finalPrompt = systemPrompt + historyPrompt + currentPrompt;
+    let finalPrompt = systemPrompt + historyPrompt + currentPrompt;
+    // 6. 处理 tools（如果存在）
+    if (tools && Array.isArray(tools) && tools.length > 0) {
+        const toolsPrompt = formatToolsToPrompt(tools);
+        finalPrompt += toolsPrompt;
+    }
 
     return {
         success: true,
@@ -313,6 +361,66 @@ async function parseImageRequest(messages, tempDir, imageLimit, modelId, isStrea
             isStreaming
         }
     };
+}
+
+/**
+ * 将 tools 数组格式化为提示词
+ * @param {Array} tools - OpenAI 格式的 tools 数组
+ * @returns {string} 格式化后的工具描述文本
+ */
+function formatToolsToPrompt(tools) {
+    if (!tools || !Array.isArray(tools) || tools.length === 0) {
+        return '';
+    }
+    let toolsText = '\n\n=== 可用工具 ===\n';
+    tools.forEach((tool, index) => {
+        if (tool.type === 'function' && tool.function) {
+            const func = tool.function;
+            toolsText += `\n工具 ${index + 1}: ${func.name}\n`;
+            if (func.description) {
+                toolsText += `描述: ${func.description}\n`;
+            }
+            if (func.parameters && func.parameters.properties) {
+                toolsText += '参数:\n';
+                const props = func.parameters.properties;
+                const required = func.parameters.required || [];
+
+                for (const [paramName, paramDef] of Object.entries(props)) {
+                    const isRequired = required.includes(paramName);
+                    const reqMark = isRequired ? ' [必需]' : ' [可选]';
+                    toolsText += `  - ${paramName}${reqMark}: ${paramDef.description || '无描述'} (${paramDef.type || 'unknown'})\n`;
+                }
+            }
+        }
+    });
+    toolsText += '\n=== 工具调用格式 ===\n';
+    toolsText += '当需要使用工具时，请严格按照以下 JSON 格式输出（不要添加其他文字）：\n';
+    toolsText += '```json\n';
+    toolsText += '{\n';
+    toolsText += '  "tool": "工具名称",\n';
+    toolsText += '  "arguments": {\n';
+    toolsText += '    "参数名1": "参数值1",\n';
+    toolsText += '    "参数名2": "参数值2"\n';
+    toolsText += '  }\n';
+    toolsText += '}\n';
+    toolsText += '```\n\n';
+    toolsText += '示例：\n';
+    if (tools[0]?.type === 'function') {
+        const exampleTool = tools[0].function;
+        const exampleArgs = {};
+        if (exampleTool.parameters?.properties) {
+            const props = exampleTool.parameters.properties;
+            const required = exampleTool.parameters.required || [];
+            for (const [key, def] of Object.entries(props)) {
+                if (required.includes(key)) {
+                    exampleArgs[key] = def.type === 'number' ? 0 : '示例值';
+                }
+            }
+        }
+        toolsText += `\`\`\`json\n{"tool": "${exampleTool.name}", "arguments": ${JSON.stringify(exampleArgs)}}\n\`\`\`\n`;
+    }
+
+    return toolsText;
 }
 
 /**
