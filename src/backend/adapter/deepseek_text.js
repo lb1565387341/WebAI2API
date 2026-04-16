@@ -284,6 +284,48 @@ async function generate(context, prompt, imgPaths, modelId, meta = {}) {
             logger.info('适配器', `已获取思考过程 (${trimmedThinking.length} 字符)`, meta);
             result.reasoning = trimmedThinking;
         }
+
+        // 对话结束后删除当前会话
+        try {
+            const targetDiv = page.locator('div[class*="ds-icon-button"][class*="ds-icon-button--m"][class*="ds-icon-button--sizing-container"][tabindex="0"][role="button"][aria-disabled="false"]').first();
+            const targetCount = await targetDiv.count();
+            if (targetCount > 0) {
+                const hoverBg = targetDiv.locator('div.ds-icon-button__hover-bg').first();
+                const hoverBgCount = await hoverBg.count();
+                if (hoverBgCount > 0) {
+                    logger.debug('适配器', '对话结束，删除当前会话...', meta);
+                    await safeClick(page, hoverBg, { bias: 'button' });
+                    await sleep(300, 500);
+                    const floatingWrapper = page.locator('div.ds-floating-position-wrapper.ds-theme');
+                    const deleteBtn = floatingWrapper.locator('div.ds-dropdown-menu-option__label:has-text("删除"), div.ds-dropdown-menu-option__label:has-text("Delete")').first();
+                    const deleteBtnCount = await deleteBtn.count();
+                    if (deleteBtnCount > 0) {
+                        await safeClick(page, deleteBtn, { bias: 'button' });
+                        await sleep(300, 500);
+                        // 点击确认框中的删除按钮
+                        const modalContent = page.locator('div.ds-modal-content.ds-elevated.ds-modal-content--dialog');
+                        const confirmBtn = modalContent.locator('span:has-text("删除"), span:has-text("Delete")').first();
+                        const confirmBtnCount = await confirmBtn.count();
+                        if (confirmBtnCount > 0) {
+                            await safeClick(page, confirmBtn, { bias: 'button' });
+                            await sleep(300, 500);
+                            logger.debug('适配器', '已确认删除当前会话', meta);
+                        } else {
+                            logger.debug('适配器', '未找到确认按钮', meta);
+                        }
+                    } else {
+                        logger.debug('适配器', '未找到删除按钮', meta);
+                    }
+                } else {
+                    logger.debug('适配器', '无可删除的会话', meta);
+                }
+            } else {
+                logger.debug('适配器', '无可删除的会话', meta);
+            }
+        } catch (e) {
+            logger.debug('适配器', `删除会话失败: ${e.message}`, meta);
+        }
+        logger.info('适配器', '任务完成', meta);
         return result;
 
     } catch (err) {
