@@ -250,7 +250,7 @@ async function parseTextRequest(messages, tempDir, imageLimit, modelId, isStream
         // 当前输入是工具调用结果
         const toolCallId = lastMsg.tool_call_id ? ` [ID: ${lastMsg.tool_call_id}]` : '';
         const rawContent = await processContent(lastMsg.content);
-        currentContent = `[工具返回结果${toolCallId}]\n${rawContent}`;
+        currentContent = `[${toolCallId}]\n${rawContent}`;
     } else {
         // 当前输入是用户消息
         currentContent = await processContent(lastMsg.content);
