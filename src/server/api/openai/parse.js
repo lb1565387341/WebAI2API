@@ -394,7 +394,7 @@ function formatToolsToPrompt(tools) {
         }
     });
     toolsText += '\n=== 工具调用格式 ===\n';
-    toolsText += '当需要使用工具时，请严格按照以下 JSON 格式输出（不要添加其他文字）：\n';
+    toolsText += '当需要使用工具时，必须包含且严格按照以下 JSON 格式输出：\n';
     toolsText += '```json\n';
     toolsText += '{\n';
     toolsText += '  "tool": "工具名称",\n';
