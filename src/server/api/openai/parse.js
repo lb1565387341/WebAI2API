@@ -394,7 +394,7 @@ function formatToolsToPrompt(tools) {
         }
     });
     toolsText += '\n=== 工具调用格式 ===\n';
-    toolsText += '当需要使用工具时，必须包含且严格按照以下 JSON 格式输出：\n';
+    toolsText += '【重要】当需要使用工具时，必须包含以下标准JSON格式输出（不要使用其他格式）：\n';
     toolsText += '```json\n';
     toolsText += '{\n';
     toolsText += '  "tool": "工具名称",\n';
@@ -404,6 +404,11 @@ function formatToolsToPrompt(tools) {
     toolsText += '  }\n';
     toolsText += '}\n';
     toolsText += '```\n\n';
+    toolsText += '⚠️ 注意事项：\n';
+    toolsText += '1. 必须使用 ```json 代码块包裹\n';
+    toolsText += '2. 字段名必须是 "tool" 和 "arguments"（小写）\n';
+    toolsText += '3. 不要添加额外说明文字，直接输出 JSON\n';
+    toolsText += '4. 如果不需要调用工具，正常回复即可\n\n';
     toolsText += '示例：\n';
     if (tools[0]?.type === 'function') {
         const exampleTool = tools[0].function;
