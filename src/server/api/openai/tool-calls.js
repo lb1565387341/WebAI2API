@@ -74,6 +74,31 @@ export function detectToolCall(content, tools) {
         }
     }
 
+    // 新增：匹配 "Tool: xxx\nArguments: {...}" 格式（不区分大小写）
+    const textFormatPattern = /[Tt]ool:\s*([\w_-]+)\s*\n\s*[Aa]rguments:\s*(\{[\s\S]*?\})(?=\s*\n|$)/g;
+    while ((match = textFormatPattern.exec(content)) !== null) {
+        try {
+            const toolName = match[1].trim();
+            const argsStr = match[2].trim();
+            const args = JSON.parse(argsStr);
+            
+            const toolExists = tools.some(t => 
+                t.type === 'function' && t.function.name === toolName
+            );
+            
+            if (toolExists) {
+                logger.info('工具调用', `通过文本格式匹配检测到工具调用: ${toolName}`, { args });
+                return {
+                    hasToolCall: true,
+                    toolName,
+                    args
+                };
+            }
+        } catch (e) {
+            logger.debug('工具调用', `文本格式解析失败: ${e.message}`);
+        }
+    }
+
     return { hasToolCall: false };
 }
 
